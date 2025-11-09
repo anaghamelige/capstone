@@ -1,0 +1,115 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Classroom Alerts (Webcam)</title>
+<style>
+  body{background:#000;color:#fff;font-family:system-ui;padding:20px}
+  #status.ok{color:#7cff7c} #status.err{color:#ff7c7c}
+  .wrap{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+  img{width:100%;border-radius:12px;border:1px solid #222;background:#111}
+  .panel{background:#111;border:1px solid #222;border-radius:12px;padding:12px}
+  .cap{opacity:.85;line-height:1.5}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  button{background:#222;border:1px solid #333;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer}
+  button:hover{background:#2a2a2a}
+  ul{list-style:none;padding-left:0;margin:0}
+  li{border-top:1px solid #222;padding:6px 0}
+  time{opacity:.6;margin-right:8px}
+</style>
+
+<h2>📢 Classroom Alerts (Webcam)</h2>
+<div id="status" class="err">Not connected</div>
+
+<div class="wrap">
+  <img id="live" alt="webcam stream">
+  <div class="panel">
+    <div class="row">
+      <h3 style="margin:0">Live counts</h3>
+      <div>
+        <button id="clearBtn">Clear log</button>
+        <button id="csvBtn">Download CSV</button>
+      </div>
+    </div>
+    <div id="liveCounts" class="cap">Waiting…</div>
+    <hr style="border:0;border-top:1px solid #222;margin:12px 0">
+    <h3 style="margin:0 0 6px 0">Detections log</h3>
+    <ul id="logList"></ul>
+  </div>
+</div>
+
+<script>
+  function speak(t){ if(!t) return; const u=new SpeechSynthesisUtterance(t); u.lang="en-IN"; u.pitch=1.2; u.rate=1.0; speechSynthesis.speak(u); }
+
+  const statusEl   = document.getElementById('status');
+  const imgEl      = document.getElementById('live');
+  const liveCounts = document.getElementById('liveCounts');
+  const logList    = document.getElementById('logList');
+  const clearBtn   = document.getElementById('clearBtn');
+  const csvBtn     = document.getElementById('csvBtn');
+
+  // simple in-memory log
+  const HISTORY_MAX = 500;
+  const history = [];  // {ts, text, counts:{class:count,...}}
+
+  function formatCounts(counts){
+    if(!counts || !counts.length) return "no anomaly detected";
+    return counts.map(c => `${c.count} ${c.class}${c.count>1 && !c.class.endsWith('s')?'s':''}`).join(", ");
+  }
+
+  function renderLive(counts){
+    const lines = (counts && counts.length)
+        ? counts.map(c => `• ${c.count} ${c.class}${c.count>1 && !c.class.endsWith('s')?'s':''}`)
+        : ["• no anomaly detected"];
+    liveCounts.innerHTML = lines.join("<br>");
+  }
+
+  function appendLogEntry(text, counts){
+    const ts = new Date();
+    history.push({ts, text, counts:Object.fromEntries((counts||[]).map(c=>[c.class,c.count]))});
+    if(history.length > HISTORY_MAX) history.shift();
+
+    const li = document.createElement('li');
+    li.innerHTML = `<time>${ts.toLocaleTimeString()}</time> ${text}`;
+    logList.appendChild(li);
+    // keep newest visible
+    li.scrollIntoView({block:'end'});
+  }
+
+  clearBtn.onclick = () => { history.length = 0; logList.innerHTML = ""; };
+
+  csvBtn.onclick = () => {
+    const rows = [["time","summary","counts_json"]];
+    history.forEach(h => rows.push([h.ts.toISOString(), h.text, JSON.stringify(h.counts)]));
+    const csv = rows.map(r => r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "detections_log.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  // connect to webcam server
+  const ws = new WebSocket("ws://127.0.0.1:8000");
+  ws.onopen = () => { statusEl.textContent="Connected"; statusEl.className="ok"; };
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === "frame") {
+      // update live panel (overwrites)
+      renderLive(d.counts);
+
+      // speak only when server asks (already cooldowned)
+      if (d.speak) {
+        speak(d.speak);
+        // also append to log so it doesn't vanish
+        appendLogEntry(d.speak, d.counts);
+      }
+
+      // refresh latest annotated frame
+      imgEl.src = d.annot + "?t=" + Date.now();
+    } else if (d.type === "error") {
+      appendLogEntry("ERROR: " + d.msg, []);
+    }
+  };
+  ws.onerror = () => { statusEl.textContent="WebSocket error"; statusEl.className="err"; };
+  ws.onclose  = () => { statusEl.textContent="Disconnected"; statusEl.className="err"; };
+</script>

@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Classroom Alerts (Images)</title>
+<style>
+  body{background:#000;color:#fff;font-family:system-ui;padding:24px}
+  #status.ok{color:#7cff7c} #status.err{color:#ff7c7c}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-top:16px}
+  figure{margin:0;background:#111;border:1px solid #222;border-radius:12px;overflow:hidden}
+  figcaption{padding:8px 12px;border-top:1px solid #222}
+  img{width:100%;display:block}
+  .cap{opacity:.8;font-size:14px;line-height:1.4}
+</style>
+
+<h2> Classroom Alerts 📢 </h2>
+<div id="status" class="err">Not connected</div>
+<div id="grid" class="grid"></div>
+
+<script>
+  function speak(t){
+    const u=new SpeechSynthesisUtterance(t);
+    u.lang="en-IN"; u.pitch=1.2; u.rate=1.0;
+    speechSynthesis.speak(u);
+  }
+  const statusEl = document.getElementById('status');
+  const grid = document.getElementById('grid');
+
+  const ws = new WebSocket("ws://127.0.0.1:8000");
+  ws.onopen = () => { statusEl.textContent = "Connected"; statusEl.className = "ok"; };
+
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === "detections") {
+      const idx = d.index ?? 0;  // sent by server
+      const lines = d.events.map(ev => `• ${ev.say} (conf ${ev.conf})`);
+
+      // build one sentence to speak for this image
+      const spoken = `For image ${idx}: ` + d.events.map(ev => ev.say).join(", ");
+      speak(spoken);
+
+      const src = d.annot + "?t=" + Date.now();
+      const fig = document.createElement('figure');
+      fig.innerHTML = `
+        <img src="${src}" alt="${d.image}">
+        <figcaption>
+          <div><b>Image ${idx} — ${d.image}</b></div>
+          <div class="cap">${lines.join("<br>")}</div>
+        </figcaption>
+      `;
+      grid.appendChild(fig);
+    } else if (d.type === "done") {
+      statusEl.textContent = "Finished"; statusEl.className = "ok";
+    }
+  };
+
+  ws.onerror = () => { statusEl.textContent = "WebSocket error"; statusEl.className = "err"; };
+  ws.onclose  = () => { if (statusEl.textContent!=="Finished"){statusEl.textContent="Disconnected"; statusEl.className = "err";} };
+</script>
